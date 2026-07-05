@@ -130,7 +130,6 @@ def transcribe_audio_file(path):
     fields = {
         "model": model,
         "prompt": prompt,
-        "language": "en",
         "response_format": "json",
         "temperature": "0",
     }
@@ -280,6 +279,27 @@ def meme_edit(url, meme_text, watermark="", font_key="impact", crop_top=0, crop_
         if crop_left   > 0: parts.append(f"left {crop_left}px")
         if crop_right  > 0: parts.append(f"right {crop_right}px")
         yield sse(f"  Cropping {', '.join(parts)} from source video...")
+
+        # Pre-flight: check actual video dimensions before ffmpeg crops
+        probe_code, probe_out, _ = run_cmd([
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0",
+            conv_path,
+        ])
+        if probe_code == 0 and probe_out.strip():
+            try:
+                vid_w, vid_h = [int(x) for x in probe_out.strip().split(",")]
+                if crop_top + crop_bottom >= vid_h:
+                    yield sse(f"[ERROR] Crop too large — top ({crop_top}px) + bottom ({crop_bottom}px) = {crop_top+crop_bottom}px ≥ video height ({vid_h}px). Reduce crop values.")
+                    return
+                if crop_left + crop_right >= vid_w:
+                    yield sse(f"[ERROR] Crop too large — left ({crop_left}px) + right ({crop_right}px) = {crop_left+crop_right}px ≥ video width ({vid_w}px). Reduce crop values.")
+                    return
+            except ValueError:
+                pass  # if parsing fails, let ffmpeg surface the error naturally
+
         new_w = f"iw-{crop_left}-{crop_right}"
         new_h = f"ih-{crop_top}-{crop_bottom}"
         code, _, stderr = run_cmd([
